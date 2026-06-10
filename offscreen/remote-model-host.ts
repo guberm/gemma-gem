@@ -42,7 +42,11 @@ export class RemoteModelHost implements ModelBackend {
   }
 
   private authHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      // Bypass ngrok's browser-warning interstitial page (harmless for non-ngrok endpoints).
+      'ngrok-skip-browser-warning': '1',
+    }
     if (this.config.apiKey) headers['Authorization'] = `Bearer ${this.config.apiKey}`
     return headers
   }

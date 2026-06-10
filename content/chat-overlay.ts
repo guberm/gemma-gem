@@ -57,23 +57,23 @@ const STYLES = `
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     color: #e2e8f0;
     font-size: 14px;
-    resize: both;
     box-sizing: border-box;
   }
 
-  /* Resize grip hint in the corner */
-  .chat-container::after {
-    content: '';
-    position: absolute;
-    bottom: 2px;
-    right: 2px;
-    width: 10px;
-    height: 10px;
-    pointer-events: none;
-    background:
-      radial-gradient(circle, rgba(139,92,246,0.45) 1px, transparent 1px) 0 0/4px 4px,
-      radial-gradient(circle, rgba(139,92,246,0.45) 1px, transparent 1px) 4px 4px/4px 4px;
+  /* Resize handles — thin transparent strips at every edge and corner */
+  .resize-handle {
+    position: absolute; z-index: 10000; user-select: none; touch-action: none;
   }
+  .resize-n, .resize-s { left: 10px; right: 10px; height: 5px; cursor: ns-resize; }
+  .resize-e, .resize-w { top: 10px; bottom: 10px; width: 5px; cursor: ew-resize; }
+  .resize-n  { top: 0; }
+  .resize-s  { bottom: 0; }
+  .resize-e  { right: 0; }
+  .resize-w  { left: 0; }
+  .resize-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+  .resize-nw { top: 0; left: 0;  width: 12px; height: 12px; cursor: nwse-resize; }
+  .resize-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+  .resize-sw { bottom: 0; left: 0;  width: 12px; height: 12px; cursor: nesw-resize; }
 
   /* Header */
   .chat-header {
@@ -677,6 +677,7 @@ export class ChatOverlay {
 
     this.setupHeaderDrag(header, callbacks)
     this.setupResizeObserver(callbacks)
+    this.setupResizeHandles()
   }
 
   // Drag the whole window by its header. Button presses are ignored.
@@ -727,6 +728,81 @@ export class ChatOverlay {
       }, 400)
     })
     ro.observe(this.container)
+  }
+
+  private setupResizeHandles(): void {
+    const MIN_W = 280
+    const MIN_H = 300
+    const MAX_W = 720
+    const MAX_H = 820
+
+    type Dir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+    const dirs: Dir[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']
+
+    dirs.forEach(dir => {
+      const el = document.createElement('div')
+      el.className = `resize-handle resize-${dir}`
+      el.addEventListener('pointerdown', (e) => this.startResize(e, dir, MIN_W, MIN_H, MAX_W, MAX_H))
+      this.container.appendChild(el)
+    })
+  }
+
+  private startResize(
+    e: PointerEvent,
+    dir: string,
+    MIN_W: number, MIN_H: number,
+    MAX_W: number, MAX_H: number,
+  ): void {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    const startX = e.clientX
+    const startY = e.clientY
+    const r = this.container.getBoundingClientRect()
+    const startW = r.width
+    const startH = r.height
+    const startL = r.left
+    const startT = r.top
+
+    const onMove = (me: PointerEvent) => {
+      const dx = me.clientX - startX
+      const dy = me.clientY - startY
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      let w = startW, h = startH, l = startL, t = startT
+
+      if (dir.includes('e')) w = Math.min(MAX_W, Math.max(MIN_W, startW + dx))
+      if (dir.includes('w')) {
+        w = Math.min(MAX_W, Math.max(MIN_W, startW - dx))
+        l = startL + startW - w
+      }
+      if (dir.includes('s')) h = Math.min(MAX_H, Math.max(MIN_H, startH + dy))
+      if (dir.includes('n')) {
+        h = Math.min(MAX_H, Math.max(MIN_H, startH - dy))
+        t = startT + startH - h
+      }
+
+      // Keep the window inside the viewport
+      l = Math.max(0, Math.min(vw - w, l))
+      t = Math.max(0, Math.min(vh - h, t))
+
+      this.container.style.width = `${w}px`
+      this.container.style.height = `${h}px`
+      this.container.style.left = `${l}px`
+      this.container.style.top = `${t}px`
+      this.container.style.right = 'auto'
+      this.container.style.bottom = 'auto'
+    }
+
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove, true)
+      document.removeEventListener('pointerup', onUp, true)
+      this.callbacks.onResize(this.container.offsetWidth, this.container.offsetHeight)
+    }
+
+    document.addEventListener('pointermove', onMove, true)
+    document.addEventListener('pointerup', onUp, true)
   }
 
   private scheduleFetchModels(): void {

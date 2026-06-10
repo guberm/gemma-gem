@@ -105,7 +105,9 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       const tabId = sender.tab?.id
       if (!tabId) return
       const base = message.baseUrl.replace(/\/+$/, '')
-      const headers: Record<string, string> = {}
+      const headers: Record<string, string> = {
+        'ngrok-skip-browser-warning': '1',
+      }
       if (message.apiKey) headers['Authorization'] = `Bearer ${message.apiKey}`
       try {
         const res = await fetch(`${base}/models`, { headers })
