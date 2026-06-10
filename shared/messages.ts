@@ -79,6 +79,20 @@ export type RemoteConfigUpdateMessage = {
   config: RemoteEndpointConfig
 }
 
+// Content Script -> Service Worker: fetch available models from a remote endpoint
+export type RemoteFetchModelsMessage = {
+  type: 'remote:fetch_models'
+  baseUrl: string
+  apiKey: string
+}
+
+// Service Worker -> Content Script: result of a models fetch
+export type RemoteModelsResultMessage = {
+  type: 'remote:models_result'
+  models: string[]
+  error?: string
+}
+
 // Service Worker -> Offscreen Document
 export type AgentRunMessage = {
   type: 'agent:run'
@@ -148,3 +162,5 @@ export type Message =
   | OffscreenAgentChunkMessage
   | OffscreenModelStatusMessage
   | GPUWarningMessage
+  | RemoteFetchModelsMessage
+  | RemoteModelsResultMessage

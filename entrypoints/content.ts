@@ -8,7 +8,7 @@ import {
   GEM_ICON_SIZE,
   type IconPosition,
 } from '@/content/gem-icon'
-import { ChatOverlay, CHAT_WIDTH, CHAT_HEIGHT } from '@/content/chat-overlay'
+import { ChatOverlay } from '@/content/chat-overlay'
 import type { ChatSettings } from '@/content/chat-overlay'
 import { executeContentTool } from '@/content/tool-executors'
 import type { Message } from '@/shared/messages'
@@ -31,6 +31,7 @@ import {
 
 const STORAGE_KEY = 'gemma_disabled_sites'
 const STORAGE_KEY_ICON_POS = 'gemma_icon_position'
+const STORAGE_KEY_CHAT_SIZE = 'gemma_chat_size'
 const SESSION_KEY_ICON_HIDDEN = 'gemma_icon_hidden'
 const PAGE_SNAPSHOT_MAX_LENGTH = 8000
 
@@ -78,6 +79,16 @@ async function loadIconPosition(): Promise<IconPosition | null> {
 
 async function saveIconPosition(pos: IconPosition): Promise<void> {
   await browser.storage.local.set({ [STORAGE_KEY_ICON_POS]: pos })
+}
+
+async function loadChatSize(): Promise<{ width: number; height: number } | null> {
+  const data = await browser.storage.local.get(STORAGE_KEY_CHAT_SIZE)
+  const s = data[STORAGE_KEY_CHAT_SIZE] as { width: number; height: number } | undefined
+  return s && typeof s.width === 'number' && typeof s.height === 'number' ? s : null
+}
+
+async function saveChatSize(width: number, height: number): Promise<void> {
+  await browser.storage.local.set({ [STORAGE_KEY_CHAT_SIZE]: { width, height } })
 }
 
 // Per-session "hide icon" flag, scoped per hostname. Stored in session storage
@@ -131,6 +142,7 @@ export default defineContentScript({
 
     let shortcuts = await loadShortcuts()
     const initialIconPosition = await loadIconPosition()
+    const initialChatSize = await loadChatSize()
     let iconHiddenThisSession = await isIconHiddenThisSession()
 
     function safeSend(message: Message): void {
@@ -197,7 +209,6 @@ export default defineContentScript({
         saveShortcuts(next)
       },
       onChatDrag(dx, dy) {
-        // Keep the icon attached to the window as it moves.
         if (!iconHiddenThisSession) moveGemIconBy(dx, dy)
       },
       onChatDragEnd() {
@@ -205,12 +216,19 @@ export default defineContentScript({
         const pos = getGemIconPosition()
         if (pos) saveIconPosition(pos)
       },
+      onFetchModels(baseUrl, apiKey) {
+        safeSend({ type: 'remote:fetch_models', baseUrl, apiKey } as any)
+      },
+      onResize(width, height) {
+        saveChatSize(width, height)
+      },
     })
 
     chat.setRemoteConfig(initialRemoteConfig)
     chat.setSelectedModel(initialModelId)
     chat.setShortcuts(shortcuts)
     chat.setIconHidden(iconHiddenThisSession)
+    if (initialChatSize) chat.setSize(initialChatSize.width, initialChatSize.height)
 
     let modelReady = false
     let shownLoadingMessage = false
@@ -253,9 +271,10 @@ export default defineContentScript({
       if (!el || el.style.display === 'none') return
       const pos = getGemIconPosition()
       if (!pos) return
+      const { width: chatW, height: chatH } = chat.getSize()
       const gap = 12
-      const left = pos.left + GEM_ICON_SIZE - CHAT_WIDTH
-      const above = pos.top - CHAT_HEIGHT - gap
+      const left = pos.left + GEM_ICON_SIZE - chatW
+      const above = pos.top - chatH - gap
       const top = above >= 0 ? above : pos.top + GEM_ICON_SIZE + gap
       chat.moveTo(left, top)
     }
@@ -368,6 +387,10 @@ export default defineContentScript({
             chat.updateStatus(`Error: ${message.error}`)
             chat.setModelSwitchEnabled(true)
           }
+          break
+
+        case 'remote:models_result':
+          chat.setModels(message.models, message.error)
           break
       }
     })

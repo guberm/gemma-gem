@@ -101,6 +101,25 @@ async function handleMessage(message: Message, sender: chrome.runtime.MessageSen
       return
     }
 
+    case 'remote:fetch_models': {
+      const tabId = sender.tab?.id
+      if (!tabId) return
+      const base = message.baseUrl.replace(/\/+$/, '')
+      const headers: Record<string, string> = {}
+      if (message.apiKey) headers['Authorization'] = `Bearer ${message.apiKey}`
+      try {
+        const res = await fetch(`${base}/models`, { headers })
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+        const data = await res.json()
+        const models: string[] = data?.data?.map((m: { id: string }) => m.id) ?? []
+        sendToTab(tabId, { type: 'remote:models_result', models })
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e)
+        sendToTab(tabId, { type: 'remote:models_result', models: [], error })
+      }
+      return
+    }
+
     case 'tool:result': {
       log.debug('tool:result', message.requestId)
       sendToRuntime(message)

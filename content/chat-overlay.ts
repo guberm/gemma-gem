@@ -27,7 +27,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   maxIterations: 10,
 }
 
-/** Fixed chat window dimensions, in px. Shared with positioning logic. */
+/** Default chat window dimensions used for initial placement calculations. */
 export const CHAT_WIDTH = 380
 export const CHAT_HEIGHT = 500
 
@@ -43,6 +43,10 @@ const STYLES = `
     right: 20px;
     width: ${CHAT_WIDTH}px;
     height: ${CHAT_HEIGHT}px;
+    min-width: 280px;
+    min-height: 300px;
+    max-width: min(720px, calc(100vw - 10px));
+    max-height: min(820px, calc(100vh - 10px));
     background: #0f0f19;
     border: 1px solid rgba(139, 92, 246, 0.3);
     border-radius: 12px;
@@ -53,11 +57,27 @@ const STYLES = `
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     color: #e2e8f0;
     font-size: 14px;
+    resize: both;
+    box-sizing: border-box;
+  }
+
+  /* Resize grip hint in the corner */
+  .chat-container::after {
+    content: '';
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 10px;
+    height: 10px;
+    pointer-events: none;
+    background:
+      radial-gradient(circle, rgba(139,92,246,0.45) 1px, transparent 1px) 0 0/4px 4px,
+      radial-gradient(circle, rgba(139,92,246,0.45) 1px, transparent 1px) 4px 4px/4px 4px;
   }
 
   /* Header */
   .chat-header {
-    padding: 10px 16px;
+    padding: 8px 12px;
     background: rgba(139, 92, 246, 0.1);
     border-bottom: 1px solid rgba(139, 92, 246, 0.2);
     display: flex;
@@ -66,11 +86,19 @@ const STYLES = `
     cursor: move;
     user-select: none;
     touch-action: none;
+    flex-shrink: 0;
+    min-height: 0;
   }
   .chat-header-btn { cursor: pointer; }
-  .chat-header-title { font-weight: 600; font-size: 14px; color: #c4b5fd; user-select: none; }
+  .chat-header-left { display: flex; flex-direction: column; gap: 1px; min-width: 0; overflow: hidden; }
+  .chat-header-title { font-weight: 600; font-size: 13px; color: #c4b5fd; white-space: nowrap; }
+  .header-model-badge {
+    font-size: 10px; color: #94a3b8; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 200px;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+  }
   .chat-status { font-size: 11px; color: #94a3b8; user-select: none; }
-  .chat-header-right { display: flex; align-items: center; gap: 6px; }
+  .chat-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .chat-header-btn {
     background: none; border: none; color: #94a3b8; cursor: pointer;
     font-size: 15px; padding: 2px 4px; line-height: 1; transition: color 0.2s;
@@ -88,11 +116,10 @@ const STYLES = `
     font-size: 11px;
     color: #64748b;
     user-select: none;
+    flex-shrink: 0;
   }
   .statusbar-tags { display: flex; gap: 8px; }
-  .statusbar-tag {
-    display: flex; align-items: center; gap: 3px;
-  }
+  .statusbar-tag { display: flex; align-items: center; gap: 3px; }
   .statusbar-tag.active { color: #a5b4fc; }
   .statusbar-tag.inactive { color: #475569; }
   .statusbar-clear {
@@ -109,6 +136,9 @@ const STYLES = `
     display: none;
     flex-direction: column;
     gap: 10px;
+    overflow-y: auto;
+    flex-shrink: 0;
+    max-height: 55%;
   }
   .settings-panel.open { display: flex; }
   .setting-row {
@@ -134,11 +164,37 @@ const STYLES = `
   }
   .setting-number:focus { border-color: rgba(139, 92, 246, 0.5); }
   .setting-text {
-    width: 150px; background: rgba(30, 30, 50, 0.6); border: 1px solid rgba(139, 92, 246, 0.2);
+    flex: 1; min-width: 0; background: rgba(30, 30, 50, 0.6); border: 1px solid rgba(139, 92, 246, 0.2);
     border-radius: 4px; padding: 3px 6px; color: #e2e8f0; font-size: 12px; outline: none;
     font-family: 'SF Mono', Menlo, Consolas, monospace;
   }
   .setting-text:focus { border-color: rgba(139, 92, 246, 0.5); }
+  .url-row { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+  .fetch-models-btn {
+    background: rgba(99,102,241,0.12); border: 1px solid rgba(139,92,246,0.25);
+    border-radius: 4px; padding: 3px 7px; color: #a5b4fc; cursor: pointer;
+    font-size: 14px; line-height: 1; transition: background 0.15s; flex-shrink: 0;
+  }
+  .fetch-models-btn:hover { background: rgba(99,102,241,0.28); }
+  @keyframes gem-spin { to { transform: rotate(360deg); } }
+  .fetch-models-btn.spinning { animation: gem-spin 0.7s linear infinite; }
+  .models-section {
+    display: none; flex-direction: column; gap: 5px;
+    padding: 6px 8px; background: rgba(15,15,30,0.5);
+    border: 1px solid rgba(139,92,246,0.12); border-radius: 5px;
+  }
+  .models-section.open { display: flex; }
+  .models-hint { font-size: 10px; color: #64748b; }
+  .models-hint.error { color: #f87171; }
+  .models-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .model-chip {
+    background: rgba(99,102,241,0.1); border: 1px solid rgba(139,92,246,0.2);
+    border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #a5b4fc;
+    cursor: pointer; font-family: 'SF Mono', Menlo, Consolas, monospace;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .model-chip:hover { background: rgba(99,102,241,0.25); }
+  .model-chip.active { background: rgba(99,102,241,0.35); border-color: rgba(139,92,246,0.55); color: #c4b5fd; }
   .remote-config {
     display: none; flex-direction: column; gap: 8px;
     padding: 8px 10px; margin-top: 2px;
@@ -167,12 +223,8 @@ const STYLES = `
   .setting-secondary:hover { background: rgba(99, 102, 241, 0.22); }
 
   /* Shortcut rebinding */
-  .settings-divider {
-    height: 1px; background: rgba(139, 92, 246, 0.15); margin: 2px 0;
-  }
-  .settings-section-label {
-    font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em;
-  }
+  .settings-divider { height: 1px; background: rgba(139, 92, 246, 0.15); margin: 2px 0; }
+  .settings-section-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
   .shortcut-controls { display: flex; align-items: center; gap: 6px; }
   .shortcut-key {
     min-width: 76px; background: rgba(30, 30, 50, 0.6); border: 1px solid rgba(139, 92, 246, 0.2);
@@ -181,9 +233,7 @@ const STYLES = `
     transition: border-color 0.2s, color 0.2s;
   }
   .shortcut-key:hover { border-color: rgba(139, 92, 246, 0.5); }
-  .shortcut-key.recording {
-    border-color: rgba(165, 180, 252, 0.8); color: #a5b4fc;
-  }
+  .shortcut-key.recording { border-color: rgba(165, 180, 252, 0.8); color: #a5b4fc; }
   .shortcut-reset {
     background: none; border: none; color: #64748b; cursor: pointer;
     font-size: 13px; padding: 0 2px; line-height: 1; transition: color 0.2s;
@@ -194,6 +244,7 @@ const STYLES = `
   .chat-messages {
     flex: 1; overflow-y: auto; padding: 12px;
     display: flex; flex-direction: column; gap: 8px;
+    min-height: 0;
   }
   .message {
     padding: 8px 12px; border-radius: 8px; max-width: 85%;
@@ -238,27 +289,18 @@ const STYLES = `
   .message-thinking {
     align-self: flex-start; background: rgba(103, 232, 249, 0.1);
     border: 1px solid rgba(103, 232, 249, 0.15); font-size: 12px; color: #67e8f9; font-style: italic;
-    cursor: pointer;
-    opacity: 0.4; transition: opacity 0.2s ease;
+    cursor: pointer; opacity: 0.4; transition: opacity 0.2s ease;
   }
   .message-thinking:hover { opacity: 1; }
   .message-thinking.pinned { opacity: 1; }
-  .thinking-header {
-    font-weight: 600; margin-bottom: 4px; user-select: none;
-  }
-  .thinking-body {
-    position: relative; overflow: hidden; transition: max-height 0.3s ease;
-  }
+  .thinking-header { font-weight: 600; margin-bottom: 4px; user-select: none; }
+  .thinking-body { position: relative; overflow: hidden; transition: max-height 0.3s ease; }
   .thinking-body.collapsed {
     max-height: 3.6em;
     -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
     mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
   }
-  .thinking-body.expanded {
-    max-height: none;
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
+  .thinking-body.expanded { max-height: none; -webkit-mask-image: none; mask-image: none; }
   .message-thinking .thinking-content { white-space: normal; }
   .message-thinking .thinking-content p { margin: 0 0 8px 0; }
   .message-thinking .thinking-content p:last-child { margin-bottom: 0; }
@@ -296,8 +338,8 @@ const STYLES = `
 
   /* Input */
   .chat-input-area {
-    padding: 12px; border-top: 1px solid rgba(139, 92, 246, 0.2);
-    display: flex; gap: 8px;
+    padding: 10px 12px; border-top: 1px solid rgba(139, 92, 246, 0.2);
+    display: flex; gap: 8px; flex-shrink: 0;
   }
   .chat-input {
     flex: 1; background: rgba(30, 30, 50, 0.6); border: 1px solid rgba(139, 92, 246, 0.2);
@@ -332,6 +374,10 @@ export interface ChatOverlayCallbacks {
   onChatDrag: (dx: number, dy: number) => void
   /** Fired once when a header drag finishes (for persistence). */
   onChatDragEnd: () => void
+  /** Request to fetch available models from the given LM Studio endpoint. */
+  onFetchModels: (baseUrl: string, apiKey: string) => void
+  /** Fired (debounced) when the user resizes the window. */
+  onResize: (width: number, height: number) => void
 }
 
 export class ChatOverlay {
@@ -351,6 +397,11 @@ export class ChatOverlay {
   private remoteConfigEl!: HTMLElement
   private remoteConfig: RemoteEndpointConfig = { ...DEFAULT_REMOTE_CONFIG }
   private hideIconBtn!: HTMLButtonElement
+  private modelBadge!: HTMLElement
+  private fetchModelsBtn!: HTMLButtonElement
+  private modelsSection!: HTMLElement
+  private modelsHint!: HTMLElement
+  private modelsChips!: HTMLElement
   private typingEl: HTMLElement | null = null
   private streamEl: HTMLElement | null = null
   private streamText = ''
@@ -364,8 +415,13 @@ export class ChatOverlay {
   }
   private shortcutKeyEls: Partial<Record<keyof ShortcutsConfig, HTMLElement>> = {}
   private stopRecording: (() => void) | null = null
+  private resizeTimer: ReturnType<typeof setTimeout> | null = null
+  private fetchModelsTimer: ReturnType<typeof setTimeout> | null = null
+  private callbacks!: ChatOverlayCallbacks
 
   constructor(callbacks: ChatOverlayCallbacks) {
+    this.callbacks = callbacks
+
     this.host = document.createElement('div')
     this.host.id = 'gemma-gem-chat'
     this.shadow = this.host.attachShadow({ mode: 'closed' })
@@ -378,19 +434,30 @@ export class ChatOverlay {
     this.container.className = 'chat-container'
     this.container.style.display = 'none'
 
-    // Header
+    // ---- Header ----
     const header = document.createElement('div')
     header.className = 'chat-header'
-    const title = document.createElement('span')
-    title.className = 'chat-header-title'
-    title.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="16" height="16" style="vertical-align: -2px; margin-right: 4px;"><polygon points="24,4 38,16 10,16" fill="#c084fc" opacity="0.9"/><polygon points="10,16 24,44 4,20" fill="#818cf8" opacity="0.85"/><polygon points="38,16 24,44 44,20" fill="#7c3aed" opacity="0.85"/><polygon points="10,16 38,16 24,44" fill="#a78bfa" opacity="0.95"/><polygon points="20,10 28,10 24,18" fill="white" opacity="0.3"/></svg>Gemma Gem`
+
+    const headerLeft = document.createElement('div')
+    headerLeft.className = 'chat-header-left'
+    const titleText = document.createElement('span')
+    titleText.className = 'chat-header-title'
+    titleText.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="14" height="14" style="vertical-align:-1px;margin-right:4px"><polygon points="24,4 38,16 10,16" fill="#c084fc" opacity="0.9"/><polygon points="10,16 24,44 4,20" fill="#818cf8" opacity="0.85"/><polygon points="38,16 24,44 44,20" fill="#7c3aed" opacity="0.85"/><polygon points="10,16 38,16 24,44" fill="#a78bfa" opacity="0.95"/><polygon points="20,10 28,10 24,18" fill="white" opacity="0.3"/></svg>Gemma Gem`
+
+    this.modelBadge = document.createElement('span')
+    this.modelBadge.className = 'header-model-badge'
+    this.modelBadge.textContent = MODELS[DEFAULT_MODEL_ID].label
+
+    headerLeft.appendChild(titleText)
+    headerLeft.appendChild(this.modelBadge)
+
     this.statusEl = document.createElement('span')
     this.statusEl.className = 'chat-status'
     this.statusEl.textContent = 'Initializing...'
 
     const gearBtn = document.createElement('button')
     gearBtn.className = 'chat-header-btn'
-    gearBtn.textContent = '\u2699' // gear
+    gearBtn.textContent = '⚙'
     gearBtn.title = 'Settings'
     gearBtn.addEventListener('click', () => {
       this.settingsPanel.classList.toggle('open')
@@ -398,7 +465,7 @@ export class ChatOverlay {
 
     const minimizeBtn = document.createElement('button')
     minimizeBtn.className = 'chat-header-btn'
-    minimizeBtn.textContent = '\u2013'
+    minimizeBtn.textContent = '–'
     minimizeBtn.title = 'Minimize'
     minimizeBtn.addEventListener('click', () => this.toggle())
 
@@ -407,10 +474,10 @@ export class ChatOverlay {
     headerRight.appendChild(this.statusEl)
     headerRight.appendChild(gearBtn)
     headerRight.appendChild(minimizeBtn)
-    header.appendChild(title)
+    header.appendChild(headerLeft)
     header.appendChild(headerRight)
 
-    // Settings panel
+    // ---- Settings panel ----
     this.settingsPanel = document.createElement('div')
     this.settingsPanel.className = 'settings-panel'
 
@@ -426,7 +493,14 @@ export class ChatOverlay {
       <div class="remote-config" data-remote-config>
         <div class="setting-row">
           <span class="setting-label">Endpoint URL</span>
-          <input type="text" class="setting-text" data-remote="baseUrl" placeholder="http://localhost:1234/v1">
+          <div class="url-row">
+            <input type="text" class="setting-text" data-remote="baseUrl" placeholder="http://localhost:1234/v1">
+            <button class="fetch-models-btn" title="Fetch available models from endpoint">⟳</button>
+          </div>
+        </div>
+        <div class="models-section" data-models-section>
+          <div class="models-hint" data-models-hint></div>
+          <div class="models-chips" data-models-chips></div>
         </div>
         <div class="setting-row">
           <span class="setting-label">Model name</span>
@@ -441,7 +515,7 @@ export class ChatOverlay {
           <input type="number" class="setting-number" data-remote="contextLimit" min="512" step="512">
         </div>
         <div class="remote-config-hint">
-          In LM Studio: load a model, then start the local server (Developer tab). Point the URL at it. The Gemma chat format is used, so a Gemma model is recommended for tool use.
+          In LM Studio: load a model, then start the local server (Developer tab). Point the URL at it. The ⟳ button fetches the list of loaded models.
         </div>
       </div>
       <div class="setting-row">
@@ -456,10 +530,19 @@ export class ChatOverlay {
         <input type="number" class="setting-number" data-setting="maxIterations" value="${this.settings.maxIterations}" min="1" max="50">
       </div>
     `
+
     this.modelSelect = this.settingsPanel.querySelector('[data-setting="modelId"]') as HTMLSelectElement
     this.remoteConfigEl = this.settingsPanel.querySelector('[data-remote-config]') as HTMLElement
+    this.modelsSection = this.remoteConfigEl.querySelector('[data-models-section]') as HTMLElement
+    this.modelsHint = this.remoteConfigEl.querySelector('[data-models-hint]') as HTMLElement
+    this.modelsChips = this.remoteConfigEl.querySelector('[data-models-chips]') as HTMLElement
+    this.fetchModelsBtn = this.remoteConfigEl.querySelector('.fetch-models-btn') as HTMLButtonElement
 
-    // Persist remote-endpoint fields as the user edits them.
+    this.fetchModelsBtn.addEventListener('click', () => {
+      this.triggerFetchModels()
+    })
+
+    // Persist remote-endpoint fields as the user edits them; auto-fetch on URL change.
     this.remoteConfigEl.addEventListener('input', (e) => {
       const target = e.target as HTMLInputElement
       const key = target.dataset.remote as keyof RemoteEndpointConfig | undefined
@@ -470,6 +553,9 @@ export class ChatOverlay {
         this.remoteConfig[key] = target.value
       }
       callbacks.onRemoteConfigChange(this.cloneRemoteConfig())
+      if (key === 'baseUrl') {
+        this.scheduleFetchModels()
+      }
     })
 
     // Shortcuts section
@@ -486,7 +572,7 @@ export class ChatOverlay {
     this.hideIconBtn = document.createElement('button')
     this.hideIconBtn.className = 'setting-secondary'
     this.hideIconBtn.textContent = 'Hide gem icon (this session)'
-    this.hideIconBtn.title = 'Hide the floating icon until you restart the browser. Reopen this chat with the toggle shortcut.'
+    this.hideIconBtn.title = 'Hide the floating icon until you restart the browser.'
     this.hideIconBtn.addEventListener('click', () => callbacks.onToggleIconHidden())
     this.settingsPanel.appendChild(this.hideIconBtn)
 
@@ -498,7 +584,6 @@ export class ChatOverlay {
 
     this.settingsPanel.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement
-      // Remote-endpoint fields manage their own persistence via the input handler.
       if (target.dataset.remote) return
       const key = target.dataset.setting
       if (key === 'modelId') {
@@ -517,7 +602,7 @@ export class ChatOverlay {
       callbacks.onSettingsChange(this.settings)
     })
 
-    // Status bar
+    // ---- Status bar ----
     const statusBar = document.createElement('div')
     statusBar.className = 'chat-statusbar'
     const tags = document.createElement('div')
@@ -545,11 +630,11 @@ export class ChatOverlay {
     statusBar.appendChild(tags)
     statusBar.appendChild(clearBtn)
 
-    // Messages
+    // ---- Messages ----
     this.messagesEl = document.createElement('div')
     this.messagesEl.className = 'chat-messages'
 
-    // Input area
+    // ---- Input area ----
     const inputArea = document.createElement('div')
     inputArea.className = 'chat-input-area'
     this.inputEl = document.createElement('textarea')
@@ -591,10 +676,10 @@ export class ChatOverlay {
     })
 
     this.setupHeaderDrag(header, callbacks)
+    this.setupResizeObserver(callbacks)
   }
 
-  // Drag the whole window by its header. Presses that land on a header button
-  // (gear/minimize) are ignored so those keep working.
+  // Drag the whole window by its header. Button presses are ignored.
   private setupHeaderDrag(header: HTMLElement, callbacks: ChatOverlayCallbacks): void {
     let dragging = false
     let lastX = 0
@@ -629,6 +714,90 @@ export class ChatOverlay {
     })
   }
 
+  private setupResizeObserver(callbacks: ChatOverlayCallbacks): void {
+    const ro = new ResizeObserver(() => {
+      if (!this.visible) return
+      const w = this.container.offsetWidth
+      const h = this.container.offsetHeight
+      if (w < 10 || h < 10) return
+      if (this.resizeTimer) clearTimeout(this.resizeTimer)
+      this.resizeTimer = setTimeout(() => {
+        this.resizeTimer = null
+        callbacks.onResize(w, h)
+      }, 400)
+    })
+    ro.observe(this.container)
+  }
+
+  private scheduleFetchModels(): void {
+    if (this.fetchModelsTimer) clearTimeout(this.fetchModelsTimer)
+    this.fetchModelsTimer = setTimeout(() => {
+      this.fetchModelsTimer = null
+      if (this.remoteConfig.baseUrl.trim()) this.triggerFetchModels()
+    }, 900)
+  }
+
+  private triggerFetchModels(): void {
+    if (!this.remoteConfig.baseUrl.trim()) return
+    this.fetchModelsBtn.classList.add('spinning')
+    this.modelsHint.textContent = 'Fetching models…'
+    this.modelsHint.classList.remove('error')
+    this.modelsChips.innerHTML = ''
+    this.modelsSection.classList.add('open')
+    this.callbacks.onFetchModels(this.remoteConfig.baseUrl, this.remoteConfig.apiKey)
+  }
+
+  setModels(models: string[], error?: string): void {
+    this.fetchModelsBtn.classList.remove('spinning')
+    this.modelsChips.innerHTML = ''
+    this.modelsSection.classList.add('open')
+
+    if (error) {
+      this.modelsHint.textContent = `Error: ${error}`
+      this.modelsHint.classList.add('error')
+      return
+    }
+
+    this.modelsHint.classList.remove('error')
+
+    if (models.length === 0) {
+      this.modelsHint.textContent = 'No models reported by server.'
+      return
+    }
+
+    this.modelsHint.textContent = 'Available — click to use:'
+    const currentName = this.remoteConfig.modelName
+
+    models.forEach(id => {
+      const chip = document.createElement('button')
+      chip.className = `model-chip${id === currentName ? ' active' : ''}`
+      chip.textContent = id
+      chip.addEventListener('click', () => {
+        const nameInput = this.remoteConfigEl.querySelector('[data-remote="modelName"]') as HTMLInputElement | null
+        if (nameInput) nameInput.value = id
+        this.remoteConfig.modelName = id
+        this.modelsChips.querySelectorAll('.model-chip').forEach(c => c.classList.remove('active'))
+        chip.classList.add('active')
+        this.callbacks.onRemoteConfigChange(this.cloneRemoteConfig())
+      })
+      this.modelsChips.appendChild(chip)
+    })
+  }
+
+  /** Current size of the chat window. */
+  getSize(): { width: number; height: number } {
+    return {
+      width: this.container.offsetWidth || CHAT_WIDTH,
+      height: this.container.offsetHeight || CHAT_HEIGHT,
+    }
+  }
+
+  /** Override the window size (e.g. to restore a persisted size). */
+  setSize(width: number, height: number): void {
+    this.container.style.width = `${width}px`
+    this.container.style.height = `${height}px`
+  }
+
   /** Current top-left of the window in the viewport. */
   getPosition(): { left: number; top: number } {
     const rect = this.container.getBoundingClientRect()
@@ -637,8 +806,9 @@ export class ChatOverlay {
 
   /** Move the window to an absolute position, clamped to the viewport. */
   moveTo(left: number, top: number): void {
-    const maxLeft = Math.max(0, window.innerWidth - CHAT_WIDTH)
-    const maxTop = Math.max(0, window.innerHeight - CHAT_HEIGHT)
+    const { width: w, height: h } = this.getSize()
+    const maxLeft = Math.max(0, window.innerWidth - w)
+    const maxTop = Math.max(0, window.innerHeight - h)
     const l = Math.min(Math.max(0, left), maxLeft)
     const t = Math.min(Math.max(0, top), maxTop)
     this.container.style.left = `${l}px`
@@ -720,7 +890,6 @@ export class ChatOverlay {
   }
 
   private beginRecording(action: keyof ShortcutsConfig, callbacks: ChatOverlayCallbacks): void {
-    // A second click on the same field cancels recording.
     if (this.stopRecording) {
       this.stopRecording()
       return
@@ -733,10 +902,7 @@ export class ChatOverlay {
 
     const onKeyDown = (e: KeyboardEvent) => {
       const shortcut = shortcutFromEvent(e)
-      // Modifier-only press: keep waiting for the real key.
       if (!shortcut) return
-      // Capture phase + stop both: keeps the bound keys (e.g. Escape) from also
-      // firing the page-level toggle/close handler while we record.
       e.preventDefault()
       e.stopPropagation()
       this.shortcuts[action] = shortcut
@@ -890,7 +1056,6 @@ export class ChatOverlay {
       msg.textContent = text
     }
 
-    // Insert before typing indicator so it stays at the bottom
     if (this.typingEl) {
       this.messagesEl.insertBefore(msg, this.typingEl)
     } else {
@@ -934,6 +1099,7 @@ export class ChatOverlay {
   setSelectedModel(modelId: ModelId): void {
     this.modelSelect.value = modelId
     this.modelTag.textContent = MODELS[modelId].label
+    this.modelBadge.textContent = MODELS[modelId].label
     this.updateRemoteVisibility(modelId)
   }
 
