@@ -177,6 +177,12 @@ export default defineContentScript({
       onSettingsChange(settings: ChatSettings) {
         safeSend({ type: 'settings:update', settings } as any)
       },
+      onNewChat() {
+        stopped = false
+        modelReady = false
+        shownLoadingMessage = false
+        safeSend({ type: 'context:clear' } as any)
+      },
       onClearContext() {
         safeSend({ type: 'context:clear' } as any)
       },

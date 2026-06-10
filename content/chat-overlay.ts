@@ -104,6 +104,13 @@ const STYLES = `
     font-size: 15px; padding: 2px 4px; line-height: 1; transition: color 0.2s;
   }
   .chat-header-btn:hover { color: #e2e8f0; }
+  .new-chat-btn {
+    background: rgba(99,102,241,0.15); border: 1px solid rgba(139,92,246,0.3);
+    border-radius: 5px; color: #a5b4fc; cursor: pointer;
+    font-size: 11px; font-weight: 600; padding: 2px 7px; line-height: 1.5;
+    transition: background 0.15s, color 0.15s; white-space: nowrap;
+  }
+  .new-chat-btn:hover { background: rgba(99,102,241,0.3); color: #c4b5fd; }
 
   /* Status bar */
   .chat-statusbar {
@@ -169,7 +176,7 @@ const STYLES = `
     font-family: 'SF Mono', Menlo, Consolas, monospace;
   }
   .setting-text:focus { border-color: rgba(139, 92, 246, 0.5); }
-  .url-row { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+  .model-name-row { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
   .fetch-models-btn {
     background: rgba(99,102,241,0.12); border: 1px solid rgba(139,92,246,0.25);
     border-radius: 4px; padding: 3px 7px; color: #a5b4fc; cursor: pointer;
@@ -178,23 +185,8 @@ const STYLES = `
   .fetch-models-btn:hover { background: rgba(99,102,241,0.28); }
   @keyframes gem-spin { to { transform: rotate(360deg); } }
   .fetch-models-btn.spinning { animation: gem-spin 0.7s linear infinite; }
-  .models-section {
-    display: none; flex-direction: column; gap: 5px;
-    padding: 6px 8px; background: rgba(15,15,30,0.5);
-    border: 1px solid rgba(139,92,246,0.12); border-radius: 5px;
-  }
-  .models-section.open { display: flex; }
-  .models-hint { font-size: 10px; color: #64748b; }
-  .models-hint.error { color: #f87171; }
-  .models-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-  .model-chip {
-    background: rgba(99,102,241,0.1); border: 1px solid rgba(139,92,246,0.2);
-    border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #a5b4fc;
-    cursor: pointer; font-family: 'SF Mono', Menlo, Consolas, monospace;
-    transition: background 0.12s, border-color 0.12s;
-  }
-  .model-chip:hover { background: rgba(99,102,241,0.25); }
-  .model-chip.active { background: rgba(99,102,241,0.35); border-color: rgba(139,92,246,0.55); color: #c4b5fd; }
+  .model-fetch-error { font-size: 10px; color: #f87171; margin-top: 2px; display: none; }
+  .model-fetch-error.visible { display: block; }
   .remote-config {
     display: none; flex-direction: column; gap: 8px;
     padding: 8px 10px; margin-top: 2px;
@@ -374,6 +366,8 @@ export interface ChatOverlayCallbacks {
   onChatDrag: (dx: number, dy: number) => void
   /** Fired once when a header drag finishes (for persistence). */
   onChatDragEnd: () => void
+  /** Clear messages and agent history to start a fresh conversation. */
+  onNewChat: () => void
   /** Request to fetch available models from the given LM Studio endpoint. */
   onFetchModels: (baseUrl: string, apiKey: string) => void
   /** Fired (debounced) when the user resizes the window. */
@@ -399,9 +393,8 @@ export class ChatOverlay {
   private hideIconBtn!: HTMLButtonElement
   private modelBadge!: HTMLElement
   private fetchModelsBtn!: HTMLButtonElement
-  private modelsSection!: HTMLElement
-  private modelsHint!: HTMLElement
-  private modelsChips!: HTMLElement
+  private modelDatalist!: HTMLDataListElement
+  private modelFetchError!: HTMLElement
   private typingEl: HTMLElement | null = null
   private streamEl: HTMLElement | null = null
   private streamText = ''
@@ -455,6 +448,15 @@ export class ChatOverlay {
     this.statusEl.className = 'chat-status'
     this.statusEl.textContent = 'Initializing...'
 
+    const newChatBtn = document.createElement('button')
+    newChatBtn.className = 'new-chat-btn'
+    newChatBtn.textContent = '+ New'
+    newChatBtn.title = 'Start a new conversation'
+    newChatBtn.addEventListener('click', () => {
+      this.clearMessages()
+      callbacks.onNewChat()
+    })
+
     const gearBtn = document.createElement('button')
     gearBtn.className = 'chat-header-btn'
     gearBtn.textContent = '⚙'
@@ -472,6 +474,7 @@ export class ChatOverlay {
     const headerRight = document.createElement('div')
     headerRight.className = 'chat-header-right'
     headerRight.appendChild(this.statusEl)
+    headerRight.appendChild(newChatBtn)
     headerRight.appendChild(gearBtn)
     headerRight.appendChild(minimizeBtn)
     header.appendChild(headerLeft)
@@ -493,19 +496,17 @@ export class ChatOverlay {
       <div class="remote-config" data-remote-config>
         <div class="setting-row">
           <span class="setting-label">Endpoint URL</span>
-          <div class="url-row">
-            <input type="text" class="setting-text" data-remote="baseUrl" placeholder="http://localhost:1234/v1">
-            <button class="fetch-models-btn" title="Fetch available models from endpoint">⟳</button>
-          </div>
-        </div>
-        <div class="models-section" data-models-section>
-          <div class="models-hint" data-models-hint></div>
-          <div class="models-chips" data-models-chips></div>
+          <input type="text" class="setting-text" data-remote="baseUrl" placeholder="http://localhost:1234/v1">
         </div>
         <div class="setting-row">
           <span class="setting-label">Model name</span>
-          <input type="text" class="setting-text" data-remote="modelName" placeholder="(loaded model)">
+          <div class="model-name-row">
+            <input type="text" class="setting-text" data-remote="modelName" placeholder="(loaded model)" list="gemma-gem-model-list">
+            <button class="fetch-models-btn" title="Fetch available models from endpoint">⟳</button>
+            <datalist id="gemma-gem-model-list" data-model-datalist></datalist>
+          </div>
         </div>
+        <div class="model-fetch-error" data-model-error></div>
         <div class="setting-row">
           <span class="setting-label">API key</span>
           <input type="password" class="setting-text" data-remote="apiKey" placeholder="(optional)">
@@ -515,7 +516,7 @@ export class ChatOverlay {
           <input type="number" class="setting-number" data-remote="contextLimit" min="512" step="512">
         </div>
         <div class="remote-config-hint">
-          In LM Studio: load a model, then start the local server (Developer tab). Point the URL at it. The ⟳ button fetches the list of loaded models.
+          In LM Studio: start the local server, enter the URL, then click ⟳ to load available models.
         </div>
       </div>
       <div class="setting-row">
@@ -533,9 +534,8 @@ export class ChatOverlay {
 
     this.modelSelect = this.settingsPanel.querySelector('[data-setting="modelId"]') as HTMLSelectElement
     this.remoteConfigEl = this.settingsPanel.querySelector('[data-remote-config]') as HTMLElement
-    this.modelsSection = this.remoteConfigEl.querySelector('[data-models-section]') as HTMLElement
-    this.modelsHint = this.remoteConfigEl.querySelector('[data-models-hint]') as HTMLElement
-    this.modelsChips = this.remoteConfigEl.querySelector('[data-models-chips]') as HTMLElement
+    this.modelDatalist = this.remoteConfigEl.querySelector('[data-model-datalist]') as HTMLDataListElement
+    this.modelFetchError = this.remoteConfigEl.querySelector('[data-model-error]') as HTMLElement
     this.fetchModelsBtn = this.remoteConfigEl.querySelector('.fetch-models-btn') as HTMLButtonElement
 
     this.fetchModelsBtn.addEventListener('click', () => {
@@ -816,48 +816,34 @@ export class ChatOverlay {
   private triggerFetchModels(): void {
     if (!this.remoteConfig.baseUrl.trim()) return
     this.fetchModelsBtn.classList.add('spinning')
-    this.modelsHint.textContent = 'Fetching models…'
-    this.modelsHint.classList.remove('error')
-    this.modelsChips.innerHTML = ''
-    this.modelsSection.classList.add('open')
+    this.modelFetchError.classList.remove('visible')
     this.callbacks.onFetchModels(this.remoteConfig.baseUrl, this.remoteConfig.apiKey)
   }
 
   setModels(models: string[], error?: string): void {
     this.fetchModelsBtn.classList.remove('spinning')
-    this.modelsChips.innerHTML = ''
-    this.modelsSection.classList.add('open')
+    this.modelDatalist.innerHTML = ''
+    this.modelFetchError.classList.remove('visible')
 
     if (error) {
-      this.modelsHint.textContent = `Error: ${error}`
-      this.modelsHint.classList.add('error')
+      this.modelFetchError.textContent = `⚠ ${error}`
+      this.modelFetchError.classList.add('visible')
       return
     }
-
-    this.modelsHint.classList.remove('error')
-
-    if (models.length === 0) {
-      this.modelsHint.textContent = 'No models reported by server.'
-      return
-    }
-
-    this.modelsHint.textContent = 'Available — click to use:'
-    const currentName = this.remoteConfig.modelName
 
     models.forEach(id => {
-      const chip = document.createElement('button')
-      chip.className = `model-chip${id === currentName ? ' active' : ''}`
-      chip.textContent = id
-      chip.addEventListener('click', () => {
-        const nameInput = this.remoteConfigEl.querySelector('[data-remote="modelName"]') as HTMLInputElement | null
-        if (nameInput) nameInput.value = id
-        this.remoteConfig.modelName = id
-        this.modelsChips.querySelectorAll('.model-chip').forEach(c => c.classList.remove('active'))
-        chip.classList.add('active')
-        this.callbacks.onRemoteConfigChange(this.cloneRemoteConfig())
-      })
-      this.modelsChips.appendChild(chip)
+      const opt = document.createElement('option')
+      opt.value = id
+      this.modelDatalist.appendChild(opt)
     })
+
+    // Auto-fill if the field is empty and exactly one model is loaded
+    const nameInput = this.remoteConfigEl.querySelector('[data-remote="modelName"]') as HTMLInputElement | null
+    if (nameInput && !nameInput.value && models.length === 1) {
+      nameInput.value = models[0]
+      this.remoteConfig.modelName = models[0]
+      this.callbacks.onRemoteConfigChange(this.cloneRemoteConfig())
+    }
   }
 
   /** Current size of the chat window. */
