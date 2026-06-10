@@ -1,10 +1,18 @@
-import { createGemIcon, updateGemProgress, setGemDisabled } from '@/content/gem-icon'
+import { createGemIcon, updateGemProgress, setGemDisabled, setGemHidden, type IconPosition } from '@/content/gem-icon'
 import { ChatOverlay } from '@/content/chat-overlay'
 import type { ChatSettings } from '@/content/chat-overlay'
 import { executeContentTool } from '@/content/tool-executors'
 import type { Message } from '@/shared/messages'
 import type { ToolCall } from '@kessler/gemma-agent'
-import { MODELS, STORAGE_KEY_MODEL, DEFAULT_MODEL_ID, type ModelId } from '@/shared/models'
+import {
+  MODELS,
+  STORAGE_KEY_MODEL,
+  STORAGE_KEY_REMOTE,
+  DEFAULT_MODEL_ID,
+  DEFAULT_REMOTE_CONFIG,
+  type ModelId,
+  type RemoteEndpointConfig,
+} from '@/shared/models'
 import {
   DEFAULT_SHORTCUTS,
   STORAGE_KEY_SHORTCUTS,
@@ -13,6 +21,8 @@ import {
 } from '@/shared/shortcuts'
 
 const STORAGE_KEY = 'gemma_disabled_sites'
+const STORAGE_KEY_ICON_POS = 'gemma_icon_position'
+const SESSION_KEY_ICON_HIDDEN = 'gemma_icon_hidden'
 const PAGE_SNAPSHOT_MAX_LENGTH = 8000
 
 function capturePageSnapshot(): string {
@@ -51,6 +61,41 @@ async function setDisabledForSite(disabled: boolean): Promise<void> {
   await browser.storage.local.set({ [STORAGE_KEY]: sites })
 }
 
+async function loadIconPosition(): Promise<IconPosition | null> {
+  const data = await browser.storage.local.get(STORAGE_KEY_ICON_POS)
+  const pos = data[STORAGE_KEY_ICON_POS]
+  return pos && typeof pos.left === 'number' && typeof pos.top === 'number' ? pos : null
+}
+
+async function saveIconPosition(pos: IconPosition): Promise<void> {
+  await browser.storage.local.set({ [STORAGE_KEY_ICON_POS]: pos })
+}
+
+// Per-session "hide icon" flag, scoped per hostname. Stored in session storage
+// so it clears on browser restart but survives page reloads within the session.
+async function isIconHiddenThisSession(): Promise<boolean> {
+  const session = browser.storage.session
+  if (!session) return false
+  const data = await session.get(SESSION_KEY_ICON_HIDDEN)
+  const hosts: string[] = data[SESSION_KEY_ICON_HIDDEN] ?? []
+  return hosts.includes(getSiteKey())
+}
+
+async function setIconHiddenThisSession(hidden: boolean): Promise<void> {
+  const session = browser.storage.session
+  if (!session) return
+  const data = await session.get(SESSION_KEY_ICON_HIDDEN)
+  const hosts: string[] = data[SESSION_KEY_ICON_HIDDEN] ?? []
+  const site = getSiteKey()
+  if (hidden && !hosts.includes(site)) {
+    hosts.push(site)
+  } else if (!hidden) {
+    const idx = hosts.indexOf(site)
+    if (idx !== -1) hosts.splice(idx, 1)
+  }
+  await session.set({ [SESSION_KEY_ICON_HIDDEN]: hosts })
+}
+
 async function loadShortcuts(): Promise<ShortcutsConfig> {
   const data = await browser.storage.local.get(STORAGE_KEY_SHORTCUTS)
   // Merge over defaults so a stored partial/legacy value can't drop a binding.
@@ -69,7 +114,15 @@ export default defineContentScript({
     const modelData = await browser.storage.local.get(STORAGE_KEY_MODEL)
     const initialModelId: ModelId = modelData[STORAGE_KEY_MODEL] ?? DEFAULT_MODEL_ID
 
+    const remoteData = await browser.storage.local.get(STORAGE_KEY_REMOTE)
+    const initialRemoteConfig: RemoteEndpointConfig = {
+      ...DEFAULT_REMOTE_CONFIG,
+      ...(remoteData[STORAGE_KEY_REMOTE] ?? {}),
+    }
+
     let shortcuts = await loadShortcuts()
+    const initialIconPosition = await loadIconPosition()
+    let iconHiddenThisSession = await isIconHiddenThisSession()
 
     function safeSend(message: Message): void {
       try {
@@ -112,13 +165,22 @@ export default defineContentScript({
         chat.hide()
         setGemDisabled(true)
       },
-      onModelSwitch(modelId: ModelId) {
+      onToggleIconHidden() {
+        iconHiddenThisSession = !iconHiddenThisSession
+        setGemHidden(iconHiddenThisSession)
+        setIconHiddenThisSession(iconHiddenThisSession)
+        chat.setIconHidden(iconHiddenThisSession)
+      },
+      onModelSwitch(modelId: ModelId, remoteConfig?: RemoteEndpointConfig) {
         chat.setInputEnabled(false)
         chat.setModelSwitchEnabled(false)
         chat.addMessage(`Switching to ${MODELS[modelId].label}...`, 'agent')
         modelReady = false
         shownLoadingMessage = false
-        safeSend({ type: 'model:switch', modelId })
+        safeSend({ type: 'model:switch', modelId, remoteConfig })
+      },
+      onRemoteConfigChange(config: RemoteEndpointConfig) {
+        safeSend({ type: 'remote:config', config } as any)
       },
       onShortcutsChange(next: ShortcutsConfig) {
         shortcuts = next
@@ -126,24 +188,32 @@ export default defineContentScript({
       },
     })
 
+    chat.setRemoteConfig(initialRemoteConfig)
     chat.setSelectedModel(initialModelId)
     chat.setShortcuts(shortcuts)
+    chat.setIconHidden(iconHiddenThisSession)
 
     let modelReady = false
     let shownLoadingMessage = false
     let stopped = false
 
-    const icon = createGemIcon(() => {
-      if (siteDisabled) {
-        if (confirm('Re-enable Gemma Gem on this site?')) {
-          siteDisabled = false
-          setDisabledForSite(false)
-          setGemDisabled(false)
+    const icon = createGemIcon({
+      onClick() {
+        if (siteDisabled) {
+          if (confirm('Re-enable Gemma Gem on this site?')) {
+            siteDisabled = false
+            setDisabledForSite(false)
+            setGemDisabled(false)
+          }
+          return
         }
-        return
-      }
-      chat.toggle()
-      safeSend({ type: 'chat:open' })
+        chat.toggle()
+        safeSend({ type: 'chat:open' })
+      },
+      onMove(pos) {
+        saveIconPosition(pos)
+      },
+      initialPosition: initialIconPosition,
     })
 
     document.body.appendChild(icon)
@@ -151,6 +221,9 @@ export default defineContentScript({
 
     if (siteDisabled) {
       setGemDisabled(true)
+    }
+    if (iconHiddenThisSession) {
+      setGemHidden(true)
     }
 
     // Capture phase so the shortcut wins even when focus is in the chat input
@@ -210,15 +283,22 @@ export default defineContentScript({
 
         case 'model:status':
           if (message.status === 'loading') {
+            const modelId = message.modelId ?? initialModelId
+            const modelConfig = MODELS[modelId]
+            const remote = modelConfig.remote === true
             const pct = message.progress != null ? Math.round(message.progress) : 0
-            updateGemProgress(pct)
-            chat.updateStatus(`Loading model... ${pct}%`)
+            updateGemProgress(remote ? -1 : pct)
+            chat.updateStatus(remote ? 'Connecting...' : `Loading model... ${pct}%`)
             chat.setInputEnabled(false)
             chat.setModelSwitchEnabled(false)
             if (!shownLoadingMessage) {
               shownLoadingMessage = true
-              const modelConfig = MODELS[message.modelId ?? initialModelId]
-              chat.addMessage(`Downloading ${modelConfig.label}... This may take a moment on first run (${modelConfig.downloadSize}, cached after).`, 'agent')
+              chat.addMessage(
+                remote
+                  ? `Connecting to ${modelConfig.label} endpoint...`
+                  : `Downloading ${modelConfig.label}... This may take a moment on first run (${modelConfig.downloadSize}, cached after).`,
+                'agent',
+              )
             }
           } else if (message.status === 'ready') {
             updateGemProgress(-1)

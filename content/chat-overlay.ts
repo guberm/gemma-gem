@@ -1,5 +1,12 @@
 import { marked } from 'marked'
-import { MODELS, DEFAULT_MODEL_ID, type ModelId } from '@/shared/models'
+import {
+  MODELS,
+  DEFAULT_MODEL_ID,
+  DEFAULT_REMOTE_CONFIG,
+  isRemoteModel,
+  type ModelId,
+  type RemoteEndpointConfig,
+} from '@/shared/models'
 import {
   DEFAULT_SHORTCUTS,
   formatShortcut,
@@ -118,6 +125,20 @@ const STYLES = `
     border-radius: 4px; padding: 3px 6px; color: #e2e8f0; font-size: 12px; text-align: center; outline: none;
   }
   .setting-number:focus { border-color: rgba(139, 92, 246, 0.5); }
+  .setting-text {
+    width: 150px; background: rgba(30, 30, 50, 0.6); border: 1px solid rgba(139, 92, 246, 0.2);
+    border-radius: 4px; padding: 3px 6px; color: #e2e8f0; font-size: 12px; outline: none;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+  }
+  .setting-text:focus { border-color: rgba(139, 92, 246, 0.5); }
+  .remote-config {
+    display: none; flex-direction: column; gap: 8px;
+    padding: 8px 10px; margin-top: 2px;
+    background: rgba(30, 30, 50, 0.4); border: 1px solid rgba(139, 92, 246, 0.15);
+    border-radius: 6px;
+  }
+  .remote-config.open { display: flex; }
+  .remote-config-hint { font-size: 10px; color: #64748b; line-height: 1.4; }
   .setting-select {
     background: rgba(30, 30, 50, 0.6); border: 1px solid rgba(139, 92, 246, 0.2);
     border-radius: 4px; padding: 3px 6px; color: #e2e8f0; font-size: 12px; outline: none; cursor: pointer;
@@ -130,6 +151,12 @@ const STYLES = `
     font-size: 12px; width: 100%; transition: background 0.2s;
   }
   .setting-disable:hover { background: rgba(239, 68, 68, 0.25); }
+  .setting-secondary {
+    background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 6px; padding: 6px 12px; color: #a5b4fc; cursor: pointer;
+    font-size: 12px; width: 100%; transition: background 0.2s;
+  }
+  .setting-secondary:hover { background: rgba(99, 102, 241, 0.22); }
 
   /* Shortcut rebinding */
   .settings-divider {
@@ -289,7 +316,9 @@ export interface ChatOverlayCallbacks {
   onSettingsChange: (settings: ChatSettings) => void
   onClearContext: () => void
   onDisableSite: () => void
-  onModelSwitch: (modelId: ModelId) => void
+  onToggleIconHidden: () => void
+  onModelSwitch: (modelId: ModelId, remoteConfig?: RemoteEndpointConfig) => void
+  onRemoteConfigChange: (config: RemoteEndpointConfig) => void
   onShortcutsChange: (shortcuts: ShortcutsConfig) => void
 }
 
@@ -307,6 +336,9 @@ export class ChatOverlay {
   private iterationsTag: HTMLElement
   private modelTag: HTMLElement
   private modelSelect: HTMLSelectElement
+  private remoteConfigEl!: HTMLElement
+  private remoteConfig: RemoteEndpointConfig = { ...DEFAULT_REMOTE_CONFIG }
+  private hideIconBtn!: HTMLButtonElement
   private typingEl: HTMLElement | null = null
   private streamEl: HTMLElement | null = null
   private streamText = ''
@@ -379,6 +411,27 @@ export class ChatOverlay {
         <span class="setting-label">Model</span>
         <select class="setting-select" data-setting="modelId">${modelOptions}</select>
       </div>
+      <div class="remote-config" data-remote-config>
+        <div class="setting-row">
+          <span class="setting-label">Endpoint URL</span>
+          <input type="text" class="setting-text" data-remote="baseUrl" placeholder="http://localhost:1234/v1">
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Model name</span>
+          <input type="text" class="setting-text" data-remote="modelName" placeholder="(loaded model)">
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">API key</span>
+          <input type="password" class="setting-text" data-remote="apiKey" placeholder="(optional)">
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Context limit</span>
+          <input type="number" class="setting-number" data-remote="contextLimit" min="512" step="512">
+        </div>
+        <div class="remote-config-hint">
+          In LM Studio: load a model, then start the local server (Developer tab). Point the URL at it. The Gemma chat format is used, so a Gemma model is recommended for tool use.
+        </div>
+      </div>
       <div class="setting-row">
         <span class="setting-label">Thinking</span>
         <label class="setting-toggle">
@@ -392,6 +445,20 @@ export class ChatOverlay {
       </div>
     `
     this.modelSelect = this.settingsPanel.querySelector('[data-setting="modelId"]') as HTMLSelectElement
+    this.remoteConfigEl = this.settingsPanel.querySelector('[data-remote-config]') as HTMLElement
+
+    // Persist remote-endpoint fields as the user edits them.
+    this.remoteConfigEl.addEventListener('input', (e) => {
+      const target = e.target as HTMLInputElement
+      const key = target.dataset.remote as keyof RemoteEndpointConfig | undefined
+      if (!key) return
+      if (key === 'contextLimit') {
+        this.remoteConfig.contextLimit = parseInt(target.value, 10) || DEFAULT_REMOTE_CONFIG.contextLimit
+      } else {
+        this.remoteConfig[key] = target.value
+      }
+      callbacks.onRemoteConfigChange(this.cloneRemoteConfig())
+    })
 
     // Shortcuts section
     const divider = document.createElement('div')
@@ -404,6 +471,13 @@ export class ChatOverlay {
     this.settingsPanel.appendChild(this.createShortcutRow('toggle', 'Toggle chat', callbacks))
     this.settingsPanel.appendChild(this.createShortcutRow('close', 'Close chat', callbacks))
 
+    this.hideIconBtn = document.createElement('button')
+    this.hideIconBtn.className = 'setting-secondary'
+    this.hideIconBtn.textContent = 'Hide gem icon (this session)'
+    this.hideIconBtn.title = 'Hide the floating icon until you restart the browser. Reopen this chat with the toggle shortcut.'
+    this.hideIconBtn.addEventListener('click', () => callbacks.onToggleIconHidden())
+    this.settingsPanel.appendChild(this.hideIconBtn)
+
     const disableBtn = document.createElement('button')
     disableBtn.className = 'setting-disable'
     disableBtn.textContent = 'Disable on this site'
@@ -412,10 +486,14 @@ export class ChatOverlay {
 
     this.settingsPanel.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement
+      // Remote-endpoint fields manage their own persistence via the input handler.
+      if (target.dataset.remote) return
       const key = target.dataset.setting
       if (key === 'modelId') {
         const newModelId = target.value as ModelId
-        callbacks.onModelSwitch(newModelId)
+        this.updateRemoteVisibility(newModelId)
+        const remoteConfig = isRemoteModel(newModelId) ? this.cloneRemoteConfig() : undefined
+        callbacks.onModelSwitch(newModelId, remoteConfig)
         return
       }
       if (key === 'thinking') {
@@ -782,6 +860,31 @@ export class ChatOverlay {
   setSelectedModel(modelId: ModelId): void {
     this.modelSelect.value = modelId
     this.modelTag.textContent = MODELS[modelId].label
+    this.updateRemoteVisibility(modelId)
+  }
+
+  private cloneRemoteConfig(): RemoteEndpointConfig {
+    return { ...this.remoteConfig }
+  }
+
+  private updateRemoteVisibility(modelId: ModelId): void {
+    this.remoteConfigEl.classList.toggle('open', isRemoteModel(modelId))
+  }
+
+  setRemoteConfig(config: RemoteEndpointConfig): void {
+    this.remoteConfig = { ...DEFAULT_REMOTE_CONFIG, ...config }
+    const set = (key: keyof RemoteEndpointConfig, value: string) => {
+      const input = this.remoteConfigEl.querySelector(`[data-remote="${key}"]`) as HTMLInputElement | null
+      if (input) input.value = value
+    }
+    set('baseUrl', this.remoteConfig.baseUrl)
+    set('modelName', this.remoteConfig.modelName)
+    set('apiKey', this.remoteConfig.apiKey)
+    set('contextLimit', String(this.remoteConfig.contextLimit))
+  }
+
+  setIconHidden(hidden: boolean): void {
+    this.hideIconBtn.textContent = hidden ? 'Show gem icon' : 'Hide gem icon (this session)'
   }
 
   setShortcuts(shortcuts: ShortcutsConfig): void {
