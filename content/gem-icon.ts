@@ -78,9 +78,14 @@ export interface GemIconOptions {
   onClick: () => void
   /** Called with the new position after the user finishes dragging the icon. */
   onMove?: (pos: IconPosition) => void
+  /** Called continuously with the live position while the icon is being dragged. */
+  onDrag?: (pos: IconPosition) => void
   /** Restore a previously-saved position. Falls back to the bottom-right corner. */
   initialPosition?: IconPosition | null
 }
+
+/** Width/height of the icon's hit area, in px. */
+export const GEM_ICON_SIZE = PROGRESS_SIZE
 
 /** Keep a position fully inside the current viewport. */
 function clampToViewport(left: number, top: number): IconPosition {
@@ -93,7 +98,7 @@ function clampToViewport(left: number, top: number): IconPosition {
 }
 
 export function createGemIcon(options: GemIconOptions): HTMLElement {
-  const { onClick, onMove, initialPosition } = options
+  const { onClick, onMove, onDrag, initialPosition } = options
 
   const container = document.createElement('div')
   container.id = 'gemma-gem-icon'
@@ -180,6 +185,7 @@ export function createGemIcon(options: GemIconOptions): HTMLElement {
     container.style.top = `${top}px`
     container.style.right = 'auto'
     container.style.bottom = 'auto'
+    onDrag?.({ left, top })
   }
 
   const onPointerUp = (e: PointerEvent) => {
@@ -228,6 +234,27 @@ export function createGemIcon(options: GemIconOptions): HTMLElement {
 export function setGemHidden(hidden: boolean): void {
   const container = document.getElementById('gemma-gem-icon')
   if (container) container.style.display = hidden ? 'none' : 'flex'
+}
+
+/** Current top-left of the icon in the viewport, or null if it isn't mounted. */
+export function getGemIconPosition(): IconPosition | null {
+  const container = document.getElementById('gemma-gem-icon')
+  if (!container) return null
+  const rect = container.getBoundingClientRect()
+  return { left: rect.left, top: rect.top }
+}
+
+/** Nudge the icon by a delta, clamped to the viewport. Returns the new position. */
+export function moveGemIconBy(dx: number, dy: number): IconPosition | null {
+  const container = document.getElementById('gemma-gem-icon')
+  if (!container) return null
+  const rect = container.getBoundingClientRect()
+  const pos = clampToViewport(rect.left + dx, rect.top + dy)
+  container.style.left = `${pos.left}px`
+  container.style.top = `${pos.top}px`
+  container.style.right = 'auto'
+  container.style.bottom = 'auto'
+  return pos
 }
 
 export function setGemDisabled(disabled: boolean): void {

@@ -1,5 +1,14 @@
-import { createGemIcon, updateGemProgress, setGemDisabled, setGemHidden, type IconPosition } from '@/content/gem-icon'
-import { ChatOverlay } from '@/content/chat-overlay'
+import {
+  createGemIcon,
+  updateGemProgress,
+  setGemDisabled,
+  setGemHidden,
+  getGemIconPosition,
+  moveGemIconBy,
+  GEM_ICON_SIZE,
+  type IconPosition,
+} from '@/content/gem-icon'
+import { ChatOverlay, CHAT_WIDTH, CHAT_HEIGHT } from '@/content/chat-overlay'
 import type { ChatSettings } from '@/content/chat-overlay'
 import { executeContentTool } from '@/content/tool-executors'
 import type { Message } from '@/shared/messages'
@@ -172,6 +181,7 @@ export default defineContentScript({
         chat.setIconHidden(iconHiddenThisSession)
       },
       onModelSwitch(modelId: ModelId, remoteConfig?: RemoteEndpointConfig) {
+        currentModelId = modelId
         chat.setInputEnabled(false)
         chat.setModelSwitchEnabled(false)
         chat.addMessage(`Switching to ${MODELS[modelId].label}...`, 'agent')
@@ -186,6 +196,15 @@ export default defineContentScript({
         shortcuts = next
         saveShortcuts(next)
       },
+      onChatDrag(dx, dy) {
+        // Keep the icon attached to the window as it moves.
+        if (!iconHiddenThisSession) moveGemIconBy(dx, dy)
+      },
+      onChatDragEnd() {
+        if (iconHiddenThisSession) return
+        const pos = getGemIconPosition()
+        if (pos) saveIconPosition(pos)
+      },
     })
 
     chat.setRemoteConfig(initialRemoteConfig)
@@ -196,6 +215,11 @@ export default defineContentScript({
     let modelReady = false
     let shownLoadingMessage = false
     let stopped = false
+    let currentModelId: ModelId = initialModelId
+
+    // Tracks the icon's position between consecutive live drag events so the
+    // chat window can follow by the same delta. Reset when a drag ends.
+    let iconDragPrev: IconPosition | null = null
 
     const icon = createGemIcon({
       onClick() {
@@ -207,14 +231,41 @@ export default defineContentScript({
           }
           return
         }
-        chat.toggle()
-        safeSend({ type: 'chat:open' })
+        openOrToggleChat()
       },
       onMove(pos) {
         saveIconPosition(pos)
+        iconDragPrev = null
+      },
+      onDrag(pos) {
+        if (iconDragPrev && chat.isVisible()) {
+          chat.moveBy(pos.left - iconDragPrev.left, pos.top - iconDragPrev.top)
+        }
+        iconDragPrev = pos
       },
       initialPosition: initialIconPosition,
     })
+
+    // Open the chat anchored to the icon: above it when there's room, otherwise
+    // below. Both are then kept in sync by the drag handlers above.
+    function placeChatNearIcon(): void {
+      const el = document.getElementById('gemma-gem-icon')
+      if (!el || el.style.display === 'none') return
+      const pos = getGemIconPosition()
+      if (!pos) return
+      const gap = 12
+      const left = pos.left + GEM_ICON_SIZE - CHAT_WIDTH
+      const above = pos.top - CHAT_HEIGHT - gap
+      const top = above >= 0 ? above : pos.top + GEM_ICON_SIZE + gap
+      chat.moveTo(left, top)
+    }
+
+    function openOrToggleChat(): void {
+      const willOpen = !chat.isVisible()
+      if (willOpen) placeChatNearIcon()
+      chat.toggle()
+      if (chat.isVisible()) safeSend({ type: 'chat:open' })
+    }
 
     document.body.appendChild(icon)
     document.body.appendChild(chat.getElement())
@@ -238,8 +289,7 @@ export default defineContentScript({
         if (siteDisabled) return
         e.preventDefault()
         e.stopPropagation()
-        chat.toggle()
-        if (chat.isVisible()) safeSend({ type: 'chat:open' })
+        openOrToggleChat()
         return
       }
       // Close chat overlay (default Escape)
@@ -283,7 +333,7 @@ export default defineContentScript({
 
         case 'model:status':
           if (message.status === 'loading') {
-            const modelId = message.modelId ?? initialModelId
+            const modelId = message.modelId ?? currentModelId
             const modelConfig = MODELS[modelId]
             const remote = modelConfig.remote === true
             const pct = message.progress != null ? Math.round(message.progress) : 0
@@ -306,6 +356,7 @@ export default defineContentScript({
             chat.setInputEnabled(true)
             chat.setModelSwitchEnabled(true)
             if (message.modelId) {
+              currentModelId = message.modelId
               chat.setSelectedModel(message.modelId)
             }
             if (!modelReady) {

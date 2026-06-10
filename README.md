@@ -62,6 +62,8 @@ Click the gear icon in the chat header:
 
 The floating gem icon is also **draggable** — press and drag it anywhere on the page. Its position is remembered across pages and sessions. A quick click still opens the chat; only a real drag moves it.
 
+The chat window opens **anchored to the icon** and is itself **movable** — drag it by its header (the title bar). The icon and window stay linked: moving either one moves the other, so the whole assistant travels together. The position is remembered across pages and sessions.
+
 ## Using a local model via LM Studio (link)
 
 Instead of running Gemma in-browser via WebGPU, you can point Gemma Gem at a local

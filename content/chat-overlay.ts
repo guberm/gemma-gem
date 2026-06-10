@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS: ChatSettings = {
   maxIterations: 10,
 }
 
+/** Fixed chat window dimensions, in px. Shared with positioning logic. */
+export const CHAT_WIDTH = 380
+export const CHAT_HEIGHT = 500
+
 const STYLES = `
   :host {
     all: initial;
@@ -37,8 +41,8 @@ const STYLES = `
     position: fixed;
     bottom: 80px;
     right: 20px;
-    width: 380px;
-    height: 500px;
+    width: ${CHAT_WIDTH}px;
+    height: ${CHAT_HEIGHT}px;
     background: #0f0f19;
     border: 1px solid rgba(139, 92, 246, 0.3);
     border-radius: 12px;
@@ -59,7 +63,11 @@ const STYLES = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    cursor: move;
+    user-select: none;
+    touch-action: none;
   }
+  .chat-header-btn { cursor: pointer; }
   .chat-header-title { font-weight: 600; font-size: 14px; color: #c4b5fd; user-select: none; }
   .chat-status { font-size: 11px; color: #94a3b8; user-select: none; }
   .chat-header-right { display: flex; align-items: center; gap: 6px; }
@@ -320,6 +328,10 @@ export interface ChatOverlayCallbacks {
   onModelSwitch: (modelId: ModelId, remoteConfig?: RemoteEndpointConfig) => void
   onRemoteConfigChange: (config: RemoteEndpointConfig) => void
   onShortcutsChange: (shortcuts: ShortcutsConfig) => void
+  /** Live delta while the chat window is dragged by its header. */
+  onChatDrag: (dx: number, dy: number) => void
+  /** Fired once when a header drag finishes (for persistence). */
+  onChatDragEnd: () => void
 }
 
 export class ChatOverlay {
@@ -577,6 +589,68 @@ export class ChatOverlay {
         this.handleSend(callbacks.onSend)
       }
     })
+
+    this.setupHeaderDrag(header, callbacks)
+  }
+
+  // Drag the whole window by its header. Presses that land on a header button
+  // (gear/minimize) are ignored so those keep working.
+  private setupHeaderDrag(header: HTMLElement, callbacks: ChatOverlayCallbacks): void {
+    let dragging = false
+    let lastX = 0
+    let lastY = 0
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging) return
+      const dx = e.clientX - lastX
+      const dy = e.clientY - lastY
+      lastX = e.clientX
+      lastY = e.clientY
+      this.moveBy(dx, dy)
+      callbacks.onChatDrag(dx, dy)
+    }
+
+    const onPointerUp = () => {
+      if (!dragging) return
+      dragging = false
+      document.removeEventListener('pointermove', onPointerMove, true)
+      document.removeEventListener('pointerup', onPointerUp, true)
+      callbacks.onChatDragEnd()
+    }
+
+    header.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return
+      if ((e.target as HTMLElement).closest('button')) return
+      dragging = true
+      lastX = e.clientX
+      lastY = e.clientY
+      document.addEventListener('pointermove', onPointerMove, true)
+      document.addEventListener('pointerup', onPointerUp, true)
+    })
+  }
+
+  /** Current top-left of the window in the viewport. */
+  getPosition(): { left: number; top: number } {
+    const rect = this.container.getBoundingClientRect()
+    return { left: rect.left, top: rect.top }
+  }
+
+  /** Move the window to an absolute position, clamped to the viewport. */
+  moveTo(left: number, top: number): void {
+    const maxLeft = Math.max(0, window.innerWidth - CHAT_WIDTH)
+    const maxTop = Math.max(0, window.innerHeight - CHAT_HEIGHT)
+    const l = Math.min(Math.max(0, left), maxLeft)
+    const t = Math.min(Math.max(0, top), maxTop)
+    this.container.style.left = `${l}px`
+    this.container.style.top = `${t}px`
+    this.container.style.right = 'auto'
+    this.container.style.bottom = 'auto'
+  }
+
+  /** Nudge the window by a delta, clamped to the viewport. */
+  moveBy(dx: number, dy: number): void {
+    const { left, top } = this.getPosition()
+    this.moveTo(left + dx, top + dy)
   }
 
   private updateStatusBar(): void {

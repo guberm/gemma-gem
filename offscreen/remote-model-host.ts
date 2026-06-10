@@ -16,6 +16,7 @@ type StatusCallback = (status: 'loading' | 'ready' | 'error', progress?: number,
 export class RemoteModelHost implements ModelBackend {
   private config: RemoteEndpointConfig = { ...DEFAULT_REMOTE_CONFIG }
   private loaded = false
+  private loadingModelId: ModelId | null = null
   private onStatus: StatusCallback
   private abortController: AbortController | null = null
 
@@ -46,7 +47,8 @@ export class RemoteModelHost implements ModelBackend {
     return headers
   }
 
-  async load(_modelId: ModelId = LM_STUDIO_MODEL_ID): Promise<void> {
+  async load(modelId: ModelId = LM_STUDIO_MODEL_ID): Promise<void> {
+    this.loadingModelId = modelId   // set before onStatus so callback sees the right id
     log.info('RemoteModelHost.load() — checking endpoint:', this.config.baseUrl)
     this.onStatus('loading', 0)
     try {
@@ -58,9 +60,11 @@ export class RemoteModelHost implements ModelBackend {
       const models: string[] = data?.data?.map((m: { id: string }) => m.id) ?? []
       log.info('Remote endpoint reachable. Models:', models.join(', ') || '(none reported)')
       this.loaded = true
+      this.loadingModelId = null
       this.onStatus('ready')
     } catch (e) {
       this.loaded = false
+      this.loadingModelId = null
       const msg = `Cannot reach ${this.config.baseUrl} — is LM Studio's local server running? (${e instanceof Error ? e.message : String(e)})`
       log.error('RemoteModelHost.load() failed:', msg)
       this.onStatus('error', undefined, msg)
@@ -73,7 +77,9 @@ export class RemoteModelHost implements ModelBackend {
   }
 
   getCurrentModelId(): ModelId | null {
-    return this.loaded ? LM_STUDIO_MODEL_ID : null
+    // Same pattern as GemmaModelHost: return the loading id while connecting,
+    // the real id once ready, null when idle/error.
+    return this.loaded ? LM_STUDIO_MODEL_ID : this.loadingModelId
   }
 
   abort(): void {
