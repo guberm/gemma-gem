@@ -125,14 +125,21 @@ const STYLES = `
     user-select: none;
     flex-shrink: 0;
   }
-  .statusbar-tags { display: flex; gap: 8px; }
-  .statusbar-tag { display: flex; align-items: center; gap: 3px; }
+  .statusbar-tags { display: flex; gap: 8px; min-width: 0; overflow: hidden; }
+  .statusbar-tag { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
   .statusbar-tag.active { color: #a5b4fc; }
   .statusbar-tag.inactive { color: #475569; }
+  .statusbar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .statusbar-clear {
     background: none; border: none; color: #64748b; cursor: pointer;
     font-size: 11px; padding: 0; transition: color 0.2s;
   }
+  .statusbar-copy {
+    background: none; border: none; color: #64748b; cursor: pointer;
+    font-size: 11px; padding: 0; transition: color 0.2s;
+  }
+  .statusbar-copy:hover { color: #a5b4fc; }
+  .statusbar-copy.copied { color: #6ee7b7; }
   .statusbar-clear:hover { color: #f87171; }
 
   /* Settings panel */
@@ -237,10 +244,14 @@ const STYLES = `
     flex: 1; overflow-y: auto; padding: 12px;
     display: flex; flex-direction: column; gap: 8px;
     min-height: 0;
+    user-select: text;
+    -webkit-user-select: text;
   }
   .message {
     padding: 8px 12px; border-radius: 8px; max-width: 85%;
     word-wrap: break-word; line-height: 1.4;
+    user-select: text;
+    -webkit-user-select: text;
   }
   .message-user {
     white-space: pre-wrap; align-self: flex-end;
@@ -619,6 +630,21 @@ export class ChatOverlay {
     tags.appendChild(this.modelTag)
     tags.appendChild(this.thinkingTag)
     tags.appendChild(this.iterationsTag)
+    const copySelectedBtn = document.createElement('button')
+    copySelectedBtn.className = 'statusbar-copy'
+    copySelectedBtn.textContent = 'Copy'
+    copySelectedBtn.title = 'Copy selected chat text'
+    copySelectedBtn.addEventListener('mousedown', (e) => e.preventDefault())
+    copySelectedBtn.addEventListener('click', () => {
+      void this.copySelectedText(copySelectedBtn)
+    })
+    const copyAllBtn = document.createElement('button')
+    copyAllBtn.className = 'statusbar-copy'
+    copyAllBtn.textContent = 'Copy all'
+    copyAllBtn.title = 'Copy the full chat'
+    copyAllBtn.addEventListener('click', () => {
+      void this.copyAllMessages(copyAllBtn)
+    })
     const clearBtn = document.createElement('button')
     clearBtn.className = 'statusbar-clear'
     clearBtn.textContent = 'Clear context'
@@ -627,8 +653,13 @@ export class ChatOverlay {
       callbacks.onClearContext()
       this.addMessage('Context cleared.', 'agent')
     })
+    const statusActions = document.createElement('div')
+    statusActions.className = 'statusbar-actions'
+    statusActions.appendChild(copySelectedBtn)
+    statusActions.appendChild(copyAllBtn)
+    statusActions.appendChild(clearBtn)
     statusBar.appendChild(tags)
-    statusBar.appendChild(clearBtn)
+    statusBar.appendChild(statusActions)
 
     // ---- Messages ----
     this.messagesEl = document.createElement('div')
@@ -978,6 +1009,107 @@ export class ChatOverlay {
       this.stopRecording = null
       this.renderShortcut(action)
     }
+  }
+
+  private async copySelectedText(button: HTMLButtonElement): Promise<void> {
+    await this.copyTextToClipboard(this.getSelectedChatText(), button, 'Copy')
+  }
+
+  private async copyAllMessages(button: HTMLButtonElement): Promise<void> {
+    await this.copyTextToClipboard(this.getChatTranscript(), button, 'Copy all')
+  }
+
+  private getSelectedChatText(): string {
+    const selection = document.getSelection()
+    const text = selection?.toString().trim() ?? ''
+    if (!selection || selection.rangeCount === 0 || !text) return ''
+
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i)
+      try {
+        if (range.intersectsNode(this.messagesEl)) return text
+      } catch {
+        const node = range.commonAncestorContainer
+        const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
+        if (element && this.messagesEl.contains(element)) return text
+      }
+    }
+
+    return ''
+  }
+
+  private getChatTranscript(): string {
+    return Array.from(this.messagesEl.querySelectorAll<HTMLElement>('.message'))
+      .map(message => {
+        const text = (message.innerText || message.textContent || '').trim()
+        if (!text) return ''
+        return `${this.getMessageLabel(message)}:\n${text}`
+      })
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
+  private getMessageLabel(message: HTMLElement): string {
+    if (message.classList.contains('message-user')) return 'You'
+    if (message.classList.contains('message-agent')) return 'Gemma'
+    if (message.classList.contains('message-thinking')) return 'Thinking'
+    if (message.classList.contains('message-tool')) return 'Tool'
+    if (message.classList.contains('message-stopped')) return 'Stopped'
+    return 'Message'
+  }
+
+  private async copyTextToClipboard(text: string, button: HTMLButtonElement, defaultLabel: string): Promise<void> {
+    const value = text.trim()
+    if (!value) {
+      this.flashCopyButton(button, 'Nothing', defaultLabel, false)
+      return
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+      } else {
+        this.copyTextWithFallback(value)
+      }
+      this.flashCopyButton(button, 'Copied', defaultLabel, true)
+    } catch {
+      try {
+        this.copyTextWithFallback(value)
+        this.flashCopyButton(button, 'Copied', defaultLabel, true)
+      } catch {
+        this.flashCopyButton(button, 'Failed', defaultLabel, false)
+      }
+    }
+  }
+
+  private copyTextWithFallback(text: string): void {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.top = '-1000px'
+    textarea.style.left = '-1000px'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+
+    const copied = document.execCommand('copy')
+    textarea.remove()
+    if (!copied) throw new Error('Copy command failed')
+  }
+
+  private flashCopyButton(
+    button: HTMLButtonElement,
+    label: string,
+    defaultLabel: string,
+    copied: boolean,
+  ): void {
+    button.textContent = label
+    button.classList.toggle('copied', copied)
+    window.setTimeout(() => {
+      button.textContent = defaultLabel
+      button.classList.remove('copied')
+    }, 1200)
   }
 
   private handleSend(onSend: (text: string) => void): void {
